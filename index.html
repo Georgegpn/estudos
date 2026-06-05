@@ -178,43 +178,37 @@
 </head>
 <body>
 
-<!-- MODAL DE CONFIGURAÇÃO DO GITHUB -->
+<!-- MODAL DE LINK DE SYNC -->
 <div class="modal-overlay hidden" id="setup-modal">
   <div class="modal">
-    <h2>☁️ Sincronizar entre computadores</h2>
-    <p class="modal-sub">Seus dados ficam salvos no repositório <strong>Georgegpn/estudos</strong> no GitHub. Funciona em qualquer computador — basta colocar o mesmo token.</p>
+    <h2>📋 Link de Sincronização</h2>
+    <p class="modal-sub">Copie este link e abra no outro computador. Os dois ficam sincronizados automaticamente — sem conta, sem senha.</p>
 
     <div class="steps">
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Gere um token GitHub (se ainda não tiver)</div>
+          <div class="step-title">Copie o link abaixo</div>
           <div class="step-desc">
-            Acesse <a href="https://github.com/settings/tokens/new" target="_blank">github.com/settings/tokens/new</a><br>
-            • Note: <code>pcma-sync</code> &nbsp;• Expiration: <code>No expiration</code><br>
-            • Marque: ✅ <strong>repo</strong> (acesso ao repositório)<br>
-            • Clique em "Generate token" e copie.
+            <div id="sync-link-box" style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;word-break:break-all;color:var(--text2);margin-top:8px;cursor:pointer;" onclick="copiarLinkSync()">
+              Gerando link...
+            </div>
+            <small style="color:var(--text2);margin-top:6px;display:block">Clique no link acima para copiar</small>
           </div>
         </div>
       </div>
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Cole o token aqui (em cada computador)</div>
-          <div class="step-desc">
-            <div class="token-input-wrap" style="margin-top:8px">
-              <input type="password" class="form-control" id="token-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" />
-            </div>
-            <small style="color:var(--text2)">O token fica salvo localmente. Não é enviado para nenhum servidor externo além do GitHub.</small>
-          </div>
+          <div class="step-title">Abra o link no outro computador</div>
+          <div class="step-desc">Seu progresso aparece automaticamente. Qualquer alteração feita em um computador aparece no outro em segundos.</div>
         </div>
       </div>
     </div>
 
-    <div id="setup-status" style="display:none;font-size:13px;padding:10px 14px;border-radius:8px;margin-bottom:16px;"></div>
     <div class="modal-actions">
-      <button class="btn btn-primary" onclick="conectarGitHub()" id="btn-conectar">🔗 Conectar</button>
-      <button class="btn btn-secondary" onclick="usarSemSync()">Usar sem sincronização</button>
+      <button class="btn btn-primary" onclick="copiarLinkSync();document.getElementById('setup-modal').classList.add('hidden')">📋 Copiar e Fechar</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('setup-modal').classList.add('hidden')">Fechar</button>
     </div>
   </div>
 </div>
@@ -244,7 +238,7 @@
     <p>Semana atual: <span id="sb-semana">1</span>/24</p>
     <p>Questões: <span id="sb-questoes">0</span></p>
     <p>Taxa de acerto: <span id="sb-acerto">0%</span></p>
-    <button class="btn-setup" onclick="document.getElementById('setup-modal').classList.remove('hidden')">⚙️ Config. Sincronização</button>
+    <button class="btn-setup" onclick="abrirModalSync()">📋 Compartilhar Link</button>
   </div>
 </aside>
 
@@ -487,128 +481,124 @@ const TIPS=[
 ];
 
 // ============================================================
-// SYNC VIA GITHUB REPO
+// SYNC VIA KVDB.IO — sem conta, sem token, sem configuração
 // ============================================================
-const REPO_OWNER = 'Georgegpn';
-const REPO_NAME  = 'estudos';
-const DATA_PATH  = 'data/progresso.json';
-let ghToken     = null;
-let fileSha     = null;
+// Na primeira abertura, um "bucket" é criado automaticamente.
+// O link do painel inclui o ID do bucket no fragmento (#).
+// Qualquer computador que abrir o mesmo link fica sincronizado.
+// ============================================================
+const KVDB = 'https://kvdb.io';
+const DATA_KEY = 'progresso';
+let bucketId   = null;
 let syncTimeout = null;
-
-function loadSyncConfig() {
-  ghToken  = localStorage.getItem('gh_token');
-  fileSha  = localStorage.getItem('gh_file_sha') || null;
-}
 
 function setSyncStatus(status) {
   const dot = document.getElementById('sync-dot');
   const lbl = document.getElementById('sync-label');
   dot.className = 'sync-dot ' + status;
-  const map = { synced:'✅ Sincronizado', syncing:'🔄 Sincronizando...', offline:'🔴 Sem conexão', local:'💾 Apenas local' };
+  const map = {
+    synced:  '✅ Sincronizado',
+    syncing: '🔄 Sincronizando...',
+    offline: '💾 Salvo localmente',
+    local:   '💾 Apenas local'
+  };
   lbl.textContent = map[status] || status;
 }
 
-// Base64 UTF-8 safe (suporta acentos)
-function b64enc(str) {
-  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g,
-    (_, p) => String.fromCharCode(parseInt(p, 16))));
-}
-function b64dec(str) {
-  return decodeURIComponent(Array.prototype.map.call(
-    atob(str.replace(/\n/g, '')),
-    c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
-  ).join(''));
+function getBucketFromUrl() {
+  const m = window.location.hash.match(/bucket=([A-Za-z0-9]+)/);
+  return m ? m[1] : null;
 }
 
-async function ghReq(method, path, body) {
-  const opts = { method, headers: { 'Authorization': 'token ' + ghToken, 'Content-Type': 'application/json' } };
-  if (body) opts.body = JSON.stringify(body);
-  return fetch('https://api.github.com' + path, opts);
+function setBucketInUrl(id) {
+  const base = window.location.href.split('#')[0];
+  history.replaceState(null, '', base + '#bucket=' + id);
 }
 
-async function loadFromRepo() {
-  if (!ghToken) return false;
+async function createBucket() {
+  try {
+    const r = await fetch(`${KVDB}/`, { method: 'POST' });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.bucket || null;
+  } catch { return null; }
+}
+
+async function loadFromKVDB() {
+  if (!bucketId) return false;
   setSyncStatus('syncing');
   try {
-    const r = await ghReq('GET', `/repos/${REPO_OWNER}/${REPO_NAME}/contents/${DATA_PATH}`);
+    const r = await fetch(`${KVDB}/${bucketId}/${DATA_KEY}`);
     if (r.status === 404) { setSyncStatus('synced'); return false; }
     if (!r.ok) { setSyncStatus('offline'); return false; }
-    const data = await r.json();
-    fileSha = data.sha;
-    localStorage.setItem('gh_file_sha', fileSha);
-    const remote = JSON.parse(b64dec(data.content));
-    state = remote;
-    localStorage.setItem('pcma_state', JSON.stringify(state));
+    const text = await r.text();
+    if (!text || text.trim() === '') { setSyncStatus('synced'); return false; }
+    const remote = JSON.parse(text);
+    if (remote && typeof remote.semana !== 'undefined') {
+      state = remote;
+      localStorage.setItem('pcma_state', JSON.stringify(state));
+    }
     setSyncStatus('synced');
     return true;
   } catch(e) { setSyncStatus('offline'); return false; }
 }
 
-async function saveToRepo() {
-  if (!ghToken) return;
+async function saveToKVDB() {
+  if (!bucketId) return;
   setSyncStatus('syncing');
   try {
-    const body = { message: 'Atualiza progresso de estudos', content: b64enc(JSON.stringify(state, null, 2)) };
-    if (fileSha) body.sha = fileSha;
-    const r = await ghReq('PUT', `/repos/${REPO_OWNER}/${REPO_NAME}/contents/${DATA_PATH}`, body);
-    const data = await r.json();
-    if (data.content && data.content.sha) {
-      fileSha = data.content.sha;
-      localStorage.setItem('gh_file_sha', fileSha);
-    }
-    setSyncStatus('synced');
+    const r = await fetch(`${KVDB}/${bucketId}/${DATA_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify(state)
+    });
+    setSyncStatus(r.ok ? 'synced' : 'offline');
   } catch(e) { setSyncStatus('offline'); }
 }
 
-async function conectarGitHub() {
-  const token = document.getElementById('token-input').value.trim();
-  if (token.length < 10) { showSetupStatus('❌ Cole o token corretamente.', '#ef4444'); return; }
-  const btn = document.getElementById('btn-conectar');
-  btn.textContent = '⏳ Conectando...'; btn.disabled = true;
-  showSetupStatus('Verificando token...', '#f5c542');
-  ghToken = token;
-  fileSha = null;
-  localStorage.setItem('gh_token', token);
-  localStorage.removeItem('gh_file_sha');
-  try {
-    const r = await ghReq('GET', `/repos/${REPO_OWNER}/${REPO_NAME}`);
-    if (!r.ok) throw new Error('Token inválido ou sem acesso ao repositório.');
-    await loadFromRepo();
-    showSetupStatus('✅ Conectado! Seus dados agora sincronizam em todos os computadores.', '#22c55e');
-    btn.textContent = '✅ Conectado!';
-    setTimeout(() => {
-      document.getElementById('setup-modal').classList.add('hidden');
-      renderOverview(); toast('☁️ Sincronização ativada!');
-      btn.textContent = '🔗 Conectar'; btn.disabled = false;
-    }, 1500);
-  } catch(e) {
-    showSetupStatus('❌ ' + e.message, '#ef4444');
-    btn.textContent = '🔗 Conectar'; btn.disabled = false;
-    ghToken = null; localStorage.removeItem('gh_token');
+async function initSync() {
+  const urlBucket   = getBucketFromUrl();
+  const localBucket = localStorage.getItem('pcma_bucket');
+
+  if (urlBucket) {
+    bucketId = urlBucket;
+    localStorage.setItem('pcma_bucket', bucketId);
+  } else if (localBucket) {
+    bucketId = localBucket;
+    setBucketInUrl(bucketId);
+  } else {
+    setSyncStatus('syncing');
+    const newId = await createBucket();
+    if (newId) {
+      bucketId = newId;
+      localStorage.setItem('pcma_bucket', bucketId);
+      setBucketInUrl(bucketId);
+    } else {
+      setSyncStatus('offline');
+      return false;
+    }
   }
+  return true;
 }
 
-function showSetupStatus(msg, color) {
-  const el = document.getElementById('setup-status');
-  el.style.display = 'block';
-  el.style.background = color + '20';
-  el.style.border = '1px solid ' + color + '50';
-  el.style.color = color;
-  el.textContent = msg;
-}
-
-function usarSemSync() {
-  document.getElementById('setup-modal').classList.add('hidden');
-  setSyncStatus('local');
+async function copiarLinkSync() {
+  const url = bucketId
+    ? window.location.href.split('#')[0] + '#bucket=' + bucketId
+    : window.location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('📋 Link copiado! Abra no outro computador para sincronizar.');
+  } catch {
+    prompt('Copie este link e abra no outro computador:', url);
+  }
 }
 
 function save() {
   localStorage.setItem('pcma_state', JSON.stringify(state));
-  if (ghToken) {
+  if (bucketId) {
     clearTimeout(syncTimeout);
     setSyncStatus('syncing');
-    syncTimeout = setTimeout(saveToRepo, 2000);
+    syncTimeout = setTimeout(saveToKVDB, 2000);
   }
 }
 
@@ -829,16 +819,19 @@ function toast(msg){const t=document.getElementById('toast');document.getElement
 // ============================================================
 // INIT
 // ============================================================
+function abrirModalSync() {
+  const url = bucketId
+    ? window.location.href.split('#')[0] + '#bucket=' + bucketId
+    : window.location.href;
+  const box = document.getElementById('sync-link-box');
+  if (box) box.textContent = url;
+  document.getElementById('setup-modal').classList.remove('hidden');
+}
+
 window.addEventListener('load', async () => {
-  document.getElementById('sim-data').value=new Date().toISOString().split('T')[0];
-  loadSyncConfig();
-
-  if (ghToken) {
-    await loadFromRepo();
-  } else {
-    setSyncStatus('local');
-  }
-
+  document.getElementById('sim-data').value = new Date().toISOString().split('T')[0];
+  const ok = await initSync();
+  if (ok) await loadFromKVDB();
   renderOverview();
 });
 </script>
