@@ -873,11 +873,7 @@ window.addEventListener('load', async () => {
     } catch(e) { setSyncStatus('offline'); }
   } else {
     setSyncStatus('local');
-    // Mostra modal se nunca configurou
-    if (!localStorage.getItem('pcma_skip_setup')) {
-      setTimeout(()=>document.getElementById('setup-modal').classList.remove('hidden'), 800);
-      localStorage.setItem('pcma_skip_setup','1');
-    }
+    // Não mostra modal automaticamente — usuário abre pelo botão de config
   }
 
   renderOverview();
